@@ -19,6 +19,7 @@ class FakeApp:
         self.query = ""
         self.queries: list[str] = []
         self.activated: list[str] = []
+        self.backspaced: list[str] = []
         self.window: UlauncherWindow | None = None
 
     def query_changed(self, query_str: str) -> None:
@@ -31,7 +32,8 @@ class FakeApp:
     def activate_result(self, result: Result, _alt: bool) -> None:
         self.activated.append(result.name)
 
-    def handle_backspace(self, _query_str: str) -> bool:
+    def handle_backspace(self, query_str: str) -> bool:
+        self.backspaced.append(query_str)
         return False
 
     def set_query(self, value: str, update_input: bool = True) -> None:
@@ -54,6 +56,7 @@ def window(mocker: MockerFixture) -> Any:
 def type_text(window: UlauncherWindow, text: str) -> None:
     for i in range(1, len(text) + 1):
         window.prompt_input.set_text(text[:i])
+        window.prompt_input.set_position(-1)  # typing leaves the cursor at the end
 
 
 def press(window: UlauncherWindow, keyname: str) -> bool:
@@ -196,3 +199,20 @@ def test_close__collects_garbage_once_idle(window: Any, mocker: MockerFixture) -
     run_idle()
 
     collect.assert_called_once_with()
+
+
+def test_backspace__leaves_a_pending_query_pending(window: Any) -> None:
+    """Deleting coalesces like typing does: BackSpace does not act on the results."""
+    type_text(window, "fire")
+
+    press(window, "BackSpace")
+
+    assert window.get_app().queries == []
+
+
+def test_backspace__asks_about_the_typed_text_while_a_query_is_pending(window: Any) -> None:
+    type_text(window, "~/Doc")
+
+    press(window, "BackSpace")
+
+    assert window.get_app().backspaced == ["~/Doc"]

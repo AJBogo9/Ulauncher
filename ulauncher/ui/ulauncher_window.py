@@ -35,8 +35,8 @@ _use_fullscreen_to_position = DESKTOP_ID == "GNOME" and not is_x11_compatible()
 _activation_needs_focus = DESKTOP_ID == "GNOME" and not is_x11_compatible()
 # Long enough for a running app to take focus, short enough not to hold the window up through a cold start
 _APP_FOCUS_TIMEOUT_SEC = 0.5
-# Keys that act on the results or on the query state, so a pending query must run before them
-_QUERY_FLUSH_KEYS = frozenset(("BackSpace", "Up", "Down", "Tab", "ISO_Left_Tab", "Return", "KP_Enter"))
+# Keys that act on the results, so a pending query must run before them
+_RESULT_KEYS = frozenset(("Up", "Down", "Tab", "ISO_Left_Tab", "Return", "KP_Enter"))
 
 
 class UlauncherWindow(Gtk.ApplicationWindow):
@@ -377,15 +377,17 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self.get_app().show_preferences()
             return True
 
-        if ctrl or alt or keyname in _QUERY_FLUSH_KEYS:
+        if keyname in _RESULT_KEYS or (ctrl and keyname in arrow_key_aliases) or (alt and event.string in jump_keys):
             self.flush_query()
 
+        # The entry's text rather than the query, which lags it while a query is pending
+        query_str = entry_widget.get_text().lstrip()
         if (
             keyname == "BackSpace"
             and not ctrl
             and not entry_widget.get_selection_bounds()
-            and entry_widget.get_position() == len(self.query_str)
-            and self.get_app().handle_backspace(self.query_str)
+            and entry_widget.get_position() == len(query_str)
+            and self.get_app().handle_backspace(query_str)
         ):
             return True
 

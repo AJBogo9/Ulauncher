@@ -107,27 +107,22 @@ class UlauncherCore:
             self._render_results(self.get_home_results(), callback, append=False)
             return
 
-        self._mode = None
-        self.query = Query(None, query_str)
+        self._mode, self.query = self._resolve(query_str)
+        self.handle_change(callback)
 
+    def _resolve(self, query_str: str) -> tuple[Mode | None, Query]:
+        """The mode that handles a query string, if any, and the query it gets."""
         # keyword match
         keyword, argument = query_str.split(" ", 1) if " " in query_str else (query_str, None)
-
         for mode, keywords in self._keyword_cache.items():
             if keyword in keywords and argument is not None:
-                self._mode = mode
-                self.query = Query(keyword, argument)
-                break
+                return mode, Query(keyword, argument)
 
         # non-keyword match
-        if not self._mode:
-            for mode in get_modes():
-                if mode.matches_query_str(query_str):
-                    self._mode = mode
-                    self.query = Query(None, query_str)
-                    break
-
-        self.handle_change(callback)
+        for mode in get_modes():
+            if mode.matches_query_str(query_str):
+                return mode, Query(None, query_str)
+        return None, Query(None, query_str)
 
     def search_triggers(self, min_score: int = 50, limit: int = 50) -> list[Result]:
         self.load_triggers()
@@ -190,8 +185,10 @@ class UlauncherCore:
         self._render_results(result_objects, callback, append=False)
 
     def handle_backspace(self, query_str: str) -> bool:
-        if self._mode:
-            new_query = self._mode.handle_backspace(query_str)
+        # Resolved from the text rather than taken from the last query, which may not have run for it yet
+        mode, _ = self._resolve(query_str) if query_str else (None, None)
+        if mode:
+            new_query = mode.handle_backspace(query_str)
             if new_query is not None:
                 self.query = new_query
                 _events.emit("app:set_query", str(new_query))

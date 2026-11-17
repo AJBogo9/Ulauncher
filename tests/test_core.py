@@ -83,3 +83,30 @@ def test_load_triggers__hands_a_dropped_keyword_to_the_mode_that_lost_it(mocker:
     core.load_triggers()
 
     assert "g" in core._keyword_cache[second]
+
+
+def test_handle_backspace__uses_the_mode_of_the_text_it_gets(mocker: MockerFixture) -> None:
+    """The window asks before the query for this text has run, so the last query's mode can be stale."""
+    from ulauncher.modes.mode import Mode
+
+    class PathMode(Mode):
+        def matches_query_str(self, query_str: str) -> bool:
+            return query_str.startswith("~/")
+
+        def handle_backspace(self, query_str: str) -> Query | None:
+            return Query(None, query_str.rsplit("/", 2)[0] + "/")
+
+        def handle_query(self, _query: Query, _callback: Callable[[effects.EffectMessage], None]) -> None: ...
+
+        def activate_result(
+            self, _action_id: str, _result: Result, _query: Query, _callback: Callable[[effects.EffectMessage], None]
+        ) -> None: ...
+
+    mocker.patch("ulauncher.core.get_modes", return_value=[PathMode()])
+    emit = mocker.patch("ulauncher.core._events.emit")
+    core = UlauncherCore()
+    core.set_query("", MagicMock())
+
+    assert core.handle_backspace("~/Documents/notes/")
+
+    emit.assert_called_once_with("app:set_query", "~/Documents/")
