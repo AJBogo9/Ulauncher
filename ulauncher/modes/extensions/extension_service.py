@@ -111,7 +111,7 @@ class ExtensionService(ExtensionRegistry):
     the id and isn't a job.
     """
 
-    listener: ExtensionServiceListener | None
+    listener: ExtensionServiceListener | None = None
     _preview_log: tuple[str, logging.Handler] | None
 
     def __init__(self) -> None:
@@ -400,6 +400,9 @@ class ExtensionService(ExtensionRegistry):
 
         old_preferences = {p_id: pref.value for p_id, pref in record.preferences.items()}
         record.persist_preferences(data)
+        # the data can change trigger keywords
+        if listener := self.listener:
+            listener.invalidate_cache()
         for p_id, new_value in data.get("preferences", {}).items():
             # Only notify about values changing for preferences declared in the manifest
             if p_id in old_preferences and new_value != old_preferences[p_id]:

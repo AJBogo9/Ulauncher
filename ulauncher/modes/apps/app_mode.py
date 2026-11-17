@@ -4,7 +4,7 @@ import logging
 from typing import Callable, Iterator
 
 from ulauncher import app_id
-from ulauncher.gi import GioUnix
+from ulauncher.gi import Gio, GioUnix
 from ulauncher.internals import effects
 from ulauncher.internals.query import Query
 from ulauncher.internals.result import Result
@@ -18,12 +18,33 @@ logger = logging.getLogger(__name__)
 
 
 class AppMode(Mode):
+    def __init__(self) -> None:
+        self._apps_changed = True
+        self._loaded_filters: tuple[bool, bool] | None = None
+        # Gio watches the desktop entry dirs and emits "changed" in this thread's main context. The
+        # monitor is freed with its last reference, so it has to be kept.
+        self._app_monitor = Gio.AppInfoMonitor.get()
+        self._app_monitor.connect("changed", self._on_apps_changed)
+
+    def _on_apps_changed(self, *_args: object) -> None:
+        self._apps_changed = True
+
+    @staticmethod
+    def _filters() -> tuple[bool, bool]:
+        settings = Settings.load()
+        return settings.enable_application_mode, settings.disable_desktop_filters
+
+    def has_trigger_changes(self) -> bool:
+        return self._apps_changed or self._filters() != self._loaded_filters
+
     def handle_query(self, _query: Query, callback: Callable[[effects.EffectMessage], None]) -> None:
         # App mode contributes search triggers but does not handle direct query-mode execution.
         callback(effects.render_results([]))
 
     def get_triggers(self) -> Iterator[AppResult]:
         settings = Settings.load()
+        self._apps_changed = False
+        self._loaded_filters = self._filters()
 
         if not settings.enable_application_mode:
             return

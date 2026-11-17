@@ -45,6 +45,8 @@ class ExtensionMode(Mode):
     _pending_callback: Callable[[EffectMessage], None] | None = None
     _loading_timer: scheduling.Context | None = None
     _request_id: int = 0
+    # Separate from the keyword cache, which matching a query refills before the triggers reload
+    _triggers_outdated = True
 
     def __init__(self, service: ExtensionService) -> None:
         self._trigger_cache = {}
@@ -52,10 +54,11 @@ class ExtensionMode(Mode):
         service.activate(self)
 
     def has_trigger_changes(self) -> bool:
-        return not self._trigger_cache
+        return self._triggers_outdated
 
     def invalidate_cache(self) -> None:
         self._trigger_cache.clear()
+        self._triggers_outdated = True
 
     def errored(self, ext_id: str) -> None:
         if not self._active_ext or self._active_ext.id != ext_id:
@@ -139,6 +142,7 @@ class ExtensionMode(Mode):
         return Result(name=f"{name} failed to start", description=error_msg or "", icon=ext.get_icon_value())
 
     def get_triggers(self) -> Iterator[Result]:
+        self._triggers_outdated = False
         self._trigger_cache.clear()
         for ext, trigger_id, trigger in self._iter_enabled_triggers():
             name = trigger.name

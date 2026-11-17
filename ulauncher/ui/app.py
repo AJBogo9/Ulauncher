@@ -86,7 +86,7 @@ class UlauncherApp(Gtk.Application):
 
     def window_ready(self) -> None:
         # The window decides when this runs, to control startup performance.
-        self.core.load_triggers(force=True)
+        self.core.load_triggers()
         self.core.set_query(self.query, self.show_results)
 
     @events.on

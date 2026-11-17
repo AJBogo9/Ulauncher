@@ -217,3 +217,14 @@ def test_destroyed_launcher__is_built_again_on_open(launcher_app: UlauncherApp) 
     launcher_app.show_launcher()
 
     assert launcher_app.windows["main"] is not first
+
+
+def test_window_ready__reloads_only_changed_triggers(mocker: MockerFixture) -> None:
+    app = UlauncherApp.__new__(UlauncherApp)
+    app.core = mocker.Mock()
+    app.query = "fire"
+
+    app.window_ready()
+
+    app.core.load_triggers.assert_called_once_with()
+    app.core.set_query.assert_called_once_with("fire", app.show_results)

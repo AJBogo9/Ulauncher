@@ -117,3 +117,20 @@ class TestShortcutMode:
         result = ShortcutResult(keyword="kw", cmd="/bin/asdf", run_without_argument=True)
         mode.activate_result("run", result, query, lambda _: None)
         run_shortcut.assert_not_called()
+
+
+def test_has_trigger_changes__after_shortcuts_are_added_or_edited(mocker: MockerFixture) -> None:
+    shortcuts = {"a": Shortcut(id="a", keyword="kw", cmd="https://example.com/%s")}
+    mocker.patch("ulauncher.modes.shortcuts.shortcut_mode.Shortcuts.load", return_value=shortcuts)
+    mode = ShortcutMode()
+    assert mode.has_trigger_changes()
+
+    list(mode.get_triggers())
+    assert not mode.has_trigger_changes()
+
+    shortcuts["b"] = Shortcut(id="b", keyword="kw2", cmd="https://example.org/%s")
+    assert mode.has_trigger_changes()
+
+    list(mode.get_triggers())
+    shortcuts["a"].keyword = "edited"  # the preferences view edits saved shortcuts in place
+    assert mode.has_trigger_changes()

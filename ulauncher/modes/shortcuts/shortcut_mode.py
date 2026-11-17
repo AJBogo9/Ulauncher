@@ -37,6 +37,11 @@ class ShortcutMode(Mode):
 
     def __init__(self) -> None:
         self.shortcuts = Shortcuts.load()
+        self._loaded_shortcuts: dict[str, dict[str, object]] | None = None
+
+    def has_trigger_changes(self) -> bool:
+        # Shortcuts is a shared instance that the preferences view saves to in place
+        return self._loaded_shortcuts != self.shortcuts
 
     def _get_active_shortcut(self, query: Query) -> Shortcut | None:
         for s in self.shortcuts.values():
@@ -59,6 +64,7 @@ class ShortcutMode(Mode):
         return [convert_to_result(s, query) for s in self.shortcuts.values() if s["is_default_search"]]
 
     def get_triggers(self) -> Iterator[Result]:
+        self._loaded_shortcuts = {shortcut_id: dict(shortcut) for shortcut_id, shortcut in self.shortcuts.items()}
         for shortcut in self.shortcuts.values():
             yield (
                 results.ShortcutStaticTrigger(**shortcut, description=get_description(shortcut))

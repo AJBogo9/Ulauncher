@@ -160,3 +160,18 @@ def test_handle_response__streamed_batches_keep_callback_until_final() -> None:
     assert mode._pending_callback is None, "the final batch clears the callback"
 
     assert callback.call_args_list == [call(non_final), call(final)]
+
+
+def test_has_trigger_changes__stays_true_until_triggers_reload() -> None:
+    """Matching a query refills the keyword cache, but the core's triggers are still stale."""
+    mode, service = _make_mode()
+    trigger = SimpleNamespace(keyword="kw", name="Trigger", description="", icon=None)
+    ext = SimpleNamespace(id="test.ext", is_enabled=True, triggers={"t1": trigger}, get_icon_value=lambda *_: "")
+    service.iterate.return_value = [ext]
+    list(mode.get_triggers())
+    assert not mode.has_trigger_changes()
+
+    mode.invalidate_cache()
+    mode._ensure_trigger_cache()
+
+    assert mode.has_trigger_changes()

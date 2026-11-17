@@ -36,3 +36,17 @@ def test_save_user_preferences__saves_and_sends_changed_values(mocker: MockerFix
     send_message.assert_called_once_with(
         record, {"type": EventType.UPDATE_PREFERENCES, "args": ("city", "Berlin", "Stockholm")}
     )
+
+
+def test_save_user_preferences__invalidates_the_trigger_cache(mocker: MockerFixture) -> None:
+    """Saved preferences can change trigger keywords, which the launcher must pick up."""
+    service = object.__new__(ExtensionService)
+    service.listener = MagicMock()
+    record = object.__new__(ExtensionRecord)
+    record.id = "test.ext"
+    mocker.patch.object(ExtensionRecord, "preferences", new_callable=PropertyMock, return_value={})
+    mocker.patch("ulauncher.modes.extensions.extension_record._load_preferences", return_value=MagicMock())
+
+    service.save_user_preferences(record, {"triggers": {"t1": {"keyword": "new"}}})
+
+    service.listener.invalidate_cache.assert_called_once_with()

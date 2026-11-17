@@ -43,8 +43,7 @@ class Mode(ABC):
     def has_trigger_changes(self) -> bool:
         """
         Returns True if this mode's triggers may need to be reloaded.
-        Note that all triggers are reloaded when the Ulauncher window is shown,
-        so this is mainly for modes that load trigger asynchronously and won't be ready initially.
+        Triggers are only reloaded when this says so, so modes with triggers must report every change.
         """
         return False
 
