@@ -111,3 +111,65 @@ the harness if Mutter injection or the headless shell fights back.
   systemd drop-in `~/.config/systemd/user/ulauncher.service.d/fork.conf` with an empty
   `ExecStart=` line and then `ExecStart=<clone>/bin/ulauncher start`, run `systemctl --user
   daemon-reload` and restart the unit. Roll back by deleting the drop-in. Tell the owner first.
+
+## Results on 2026-11-17
+
+Steps 0 to 8 are done except step 4. Each change is one commit on main with its harness numbers in
+the message, and the progress ledger in `.superpowers/sdd/fork-perf-plan/progress.md` (git-ignored)
+has every ruling. Nothing is pushed and the live launcher is still the PPA build.
+
+### Harness
+
+`scripts/perf/harness.py` runs Ulauncher from source trees or git revisions in a private headless
+gnome-shell and types into it through Mutter RemoteDesktop. Snapshot the user's dirs once, then
+compare trees:
+
+```sh
+env -i HOME=$HOME PATH=/usr/bin:/bin LANG=C.UTF-8 python3 scripts/perf/harness.py snapshot
+env -i HOME=$HOME PATH=/usr/bin:/bin LANG=C.UTF-8 python3 scripts/perf/harness.py run \
+    --tree base=git:38cacd1b --tree current=.
+```
+
+`--words a,b,c` types other words, `label=path+nofullscreen` sizes the window to its content and
+`label=path+profile` writes cProfile data per query. Results land in `.perf/results/`, and
+`harness.py analyze <file>` recomputes a summary. Medians move by a few ms between runs, so only
+compare trees within one run. `scripts/perf/check_scoring.py` checks that fuzzy scores match a git
+revision.
+
+### Base against current
+
+48 trials per tree, median / p90 / max in ms, base 38cacd1b against c0607e0e (before the garbage
+collection change, which only moves full collections out of typing).
+
+| Measure | base, "firefox" | current, "firefox" | base, eight words | current, eight words |
+| --- | --- | --- | --- | --- |
+| Toggle to focus | 46.1 / 55.8 / 71 | 30.1 / 39.9 / 43.2 | 46.6 / 57.5 / 62.3 | 23.6 / 39.9 / 49.9 |
+| Key handler | 15.5 / 33.5 / 50.6 | 0.3 / 0.5 / 1 | 14.3 / 31.2 / 50.6 | 0.3 / 0.8 / 2 |
+| Key to screen | 41.3 / 108.7 / 189.4 | 13.1 / 23.9 / 53.7 | 35.5 / 69.3 / 165 | 13.2 / 17.6 / 41.8 |
+| Query | 15 / 33.2 / 50.4 | 6 / 11.5 / 27.5 | 13.9 / 30.8 / 50 | 5.8 / 9.3 / 16.3 |
+| Enter to window hidden | 220.9 / 238.8 / 287.6 | 149.2 / 163.5 / 170.2 | 113.1 / 235.8 / 248 | 76.9 / 162.9 / 171 |
+
+No wrong launches. Lost keys are the same in both and all were typed before the window had focus.
+
+### What each step found
+
+- 1, 2: rebuilding the window cost about 6 ms; the larger cost was the forced trigger reload after
+  the first frame, which the focus-in event waited behind.
+- 3: the query moved out of the key handler into an idle callback; keys that act on results flush it.
+- 4: skipped. No Enter arrived with a query pending at 10 to 70 ms per key.
+- 5: rendering, not scoring, was most of a query. Icon cache 512, visible rows first, reused rows.
+- 6: one SequenceMatcher per text. Identical on 1,994,792 pairs, cold search 8.33 -> 6.99 ms in
+  process, no change end to end.
+- 7: kept the full-monitor surface. It costs nothing while typing and about 5 ms per open.
+- 8: launches read the cgroup instead of running systemctl (7 ms each), and the window closes when
+  the launched app takes focus instead of 70 ms later.
+- After review: focus goes back to the entry on every open, close clears results and collects
+  garbage, keywords survive conflicts, and settings, compositing and scaling changes rebuild.
+
+### Left open
+
+- Deleting does not coalesce: BackSpace and Ctrl or Alt combinations run a pending query at once.
+- A row built on demand right after a render is not scrolled into view until the next arrow key.
+- The settings and theme check costs about 1.25 ms per open before the window shows.
+- Not measured: the live GNOME session with its GPU compositor and the real hotkey, X11 and
+  XWayland, layer shell, and the non-persistent mode in daily use.
