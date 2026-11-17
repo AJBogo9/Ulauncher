@@ -206,3 +206,64 @@ class TestResultsViewStreaming:
         view.render(self._update(["a", "b"], query="q2"))
         assert view._user_selected is False
         assert view._index == 0
+
+
+class TestResultsViewVisibleRowsFirst:
+    """Rows past the visible height are built when idle, unless something needs them sooner."""
+
+    @pytest.fixture(autouse=True)
+    def _no_scroll(self, mocker: MockerFixture) -> None:
+        mocker.patch("ulauncher.ui.result_widget.ResultWidget.scroll_to_focus")
+
+    @pytest.fixture
+    def view(self) -> ResultsView:
+        settings = MagicMock()
+        settings.get_jump_keys.return_value = list("1234567890abcdefghijklmnopqrstuvwxyz")
+        view = ResultsView(settings, lambda *_: None, lambda *_: None)
+        view.set_max_height(150)
+        return view
+
+    @staticmethod
+    def _update(count: int, query: str = "q", selected_name: str | None = None) -> ResultsUpdate:
+        results = [Result(name=f"r{i}", searchable=True) for i in range(count)]
+        return results_update(results, Query(None, query), selected_name)
+
+    @staticmethod
+    def _run_idle() -> None:
+        from ulauncher.gi import GLib
+
+        context = GLib.MainContext.default()
+        while context.pending():
+            context.iteration(False)
+
+    def test_builds_the_rows_that_fill_the_height_then_the_rest_when_idle(self, view: ResultsView) -> None:
+        view.render(self._update(30))
+        assert 1 <= len(view._widgets) < 30
+
+        self._run_idle()
+
+        assert [w.result.name for w in view._widgets] == [f"r{i}" for i in range(30)]
+
+    def test_selects_a_remembered_pick_past_the_first_rows(self, view: ResultsView) -> None:
+        view.render(self._update(30, selected_name="r25"))
+
+        active = view.get_active_result()
+        assert active is not None
+        assert active.name == "r25"
+
+    def test_go_up_from_first_wraps_to_the_last_result(self, view: ResultsView) -> None:
+        view.render(self._update(30))
+
+        view.go_up()
+
+        active = view.get_active_result()
+        assert active is not None
+        assert active.name == "r29"
+
+    def test_a_new_query_drops_rows_not_built_yet(self, view: ResultsView) -> None:
+        view.render(self._update(30, query="q1"))
+        view.render(self._update(3, query="q2"))
+
+        self._run_idle()
+
+        assert [w.result.name for w in view._widgets] == ["r0", "r1", "r2"]
