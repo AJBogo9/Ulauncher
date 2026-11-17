@@ -214,6 +214,18 @@ def install_probes() -> bool:
 
         UlauncherApp.query_changed = query_changed
 
+    import gc
+
+    gc_start: dict[str, float] = {}
+
+    def on_gc(phase: str, info: dict[str, int]) -> None:
+        if phase == "start":
+            gc_start["t"] = now()
+        elif "t" in gc_start:
+            emit("gc", t0=gc_start.pop("t"), t1=now(), generation=info["generation"], collected=info["collected"])
+
+    gc.callbacks.append(on_gc)
+
     emit("ready", t=now(), pid=os.getpid())
     return False
 

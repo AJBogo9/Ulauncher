@@ -557,6 +557,10 @@ def analyze(
         "queries": len(typed_queries),
         "query_ms": [ms(q["t1"] - q["t0"]) for q in typed_queries],
         "paint_ms": paint_ms,
+        "gc_ms": [ms(g["t1"] - g["t0"]) for g in events if g["ev"] == "gc" and g["t0"] < enter[2] + 1],
+        "gc2_ms": [
+            ms(g["t1"] - g["t0"]) for g in events if g["ev"] == "gc" and g["generation"] == 2 and g["t0"] < enter[2] + 1
+        ],
     }
 
 
@@ -602,6 +606,8 @@ def summarize(label: str, trials: list[dict[str, Any]], reference: dict[str, Any
         "max_frame_ms": stats([t["max_frame_ms"] for t in trials]),
         "query_ms": stats([q for t in trials for q in t.get("query_ms", [])]),
         "paint_ms": stats([p for t in trials for p in t.get("paint_ms", [])]),
+        "gc_ms": stats([g for t in trials for g in t.get("gc_ms", [])]),
+        "gc2_ms": stats([g for t in trials for g in t.get("gc2_ms", [])]),
         "queries_per_trial": stats([t.get("queries") for t in trials]),
     }
 
