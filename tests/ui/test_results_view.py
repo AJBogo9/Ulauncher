@@ -314,3 +314,18 @@ class TestResultsViewRowReuse:
 
         selected = [w.result.name for w in view._widgets if "selected" in w.item_box.get_style_context().list_classes()]
         assert selected == ["d"]
+
+
+def test_destroy__cancels_rows_waiting_to_be_built(mocker: MockerFixture) -> None:
+    mocker.patch("ulauncher.ui.result_widget.ResultWidget.scroll_to_focus")
+    settings = MagicMock()
+    settings.get_jump_keys.return_value = list("1234567890")
+    view = ResultsView(settings, lambda *_: None, lambda *_: None)
+    view.set_max_height(100)
+    view.render(results_update([Result(name=f"r{i}") for i in range(10)], Query(None, "q")))
+    pending = view._pending_rows
+    assert pending is not None
+
+    view.destroy()
+
+    assert pending.source is None

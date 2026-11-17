@@ -55,6 +55,7 @@ class ResultsView(Gtk.ScrolledWindow):
         self._box.get_style_context().add_class("result-box")
         self._box.connect("size-allocate", self._fit_results_height)
         self.add(self._box)
+        self.connect("destroy", lambda *_: self._drop_unbuilt())
         # Once, while the box is empty: rows get the CSS as they are built, and adding it again to
         # every reused row would restyle them all
         self._apply_css(self._box)
