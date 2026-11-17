@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from typing import Any, cast
 from weakref import WeakValueDictionary
 
 import pytest
@@ -113,3 +114,106 @@ def test_restart__decides_by_unit_state(
         controller.restart.assert_called_once_with(no_block=True)
     assert run_when_idle.called == expect_quit
     assert app.restart_requested == expect_reexec
+
+
+class _FakeLauncher:
+    """Stands in for UlauncherWindow: records opens and emits the hide/destroy signals it is connected to."""
+
+    built = 0
+
+    def __init__(self, application: UlauncherApp) -> None:
+        _FakeLauncher.built += 1
+        self.app = application
+        self.handlers: dict[str, list[Any]] = {}
+        self.opens = 0
+        self.outdated = False
+        self.destroyed = False
+
+    def connect(self, signal: str, handler: Any, *args: Any) -> None:
+        self.handlers.setdefault(signal, []).append((handler, args))
+
+    def _emit(self, signal: str) -> None:
+        for handler, args in self.handlers.get(signal, []):
+            handler(self, *args)
+
+    def get_window(self) -> object:
+        return object()
+
+    def open(self) -> None:
+        self.opens += 1
+
+    def is_outdated(self) -> bool:
+        return self.outdated
+
+    def close(self) -> None:
+        self._emit("hide")
+
+    def destroy(self) -> None:
+        self.destroyed = True
+        self._emit("destroy")
+
+
+@pytest.fixture
+def launcher_app(mocker: MockerFixture) -> UlauncherApp:
+    _FakeLauncher.built = 0
+    mocker.patch("ulauncher.ui.app.UlauncherWindow", _FakeLauncher)
+    mocker.patch("ulauncher.utils.scheduling.timer")
+    app = UlauncherApp.__new__(UlauncherApp)
+    app.windows = WeakValueDictionary()
+    app._persistent = True
+    return app
+
+
+def test_show_launcher__reuses_the_window_after_close(launcher_app: UlauncherApp) -> None:
+    launcher_app.show_launcher()
+    first = launcher_app.windows["main"]
+    launcher_app.close_launcher()
+    assert "main" not in launcher_app.windows
+
+    launcher_app.show_launcher()
+
+    assert launcher_app.windows["main"] is first
+    assert cast("_FakeLauncher", first).opens == 2
+    assert _FakeLauncher.built == 1
+
+
+def test_show_launcher__rebuilds_an_outdated_window(launcher_app: UlauncherApp) -> None:
+    launcher_app.show_launcher()
+    first = cast("_FakeLauncher", launcher_app.windows["main"])
+    launcher_app.close_launcher()
+    first.outdated = True
+
+    launcher_app.show_launcher()
+
+    assert first.destroyed
+    assert launcher_app.windows["main"] is not first
+    assert _FakeLauncher.built == 2
+
+
+def test_show_launcher__noop_while_open(launcher_app: UlauncherApp) -> None:
+    launcher_app.show_launcher()
+    launcher_app.show_launcher()
+
+    assert cast("_FakeLauncher", launcher_app.windows["main"]).opens == 1
+
+
+def test_close_launcher__quits_when_not_persistent(launcher_app: UlauncherApp, mocker: MockerFixture) -> None:
+    launcher_app._persistent = False
+    timer = mocker.patch("ulauncher.utils.scheduling.timer")
+    launcher_app.show_launcher()
+
+    launcher_app.close_launcher()
+
+    assert "main" not in launcher_app.windows
+    assert timer.called
+
+
+def test_destroyed_launcher__is_built_again_on_open(launcher_app: UlauncherApp) -> None:
+    launcher_app.show_launcher()
+    first = cast("_FakeLauncher", launcher_app.windows["main"])
+    first.destroy()  # e.g. the compositor asked the window to close
+    assert "main" not in launcher_app.windows
+
+    launcher_app.show_launcher()
+
+    assert launcher_app.windows["main"] is not first

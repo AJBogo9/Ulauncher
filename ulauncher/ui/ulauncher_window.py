@@ -5,7 +5,7 @@ import os
 import re
 import sys
 import time
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from gi.repository import Gdk, Gtk
 
@@ -48,14 +48,14 @@ class UlauncherWindow(Gtk.ApplicationWindow):
     _awaiting_app_focus = False
 
     def __init__(self, **kwargs: Any) -> None:
-        logger.info("Opening Ulauncher window")
+        logger.info("Building Ulauncher window")
         self.settings = Settings.load(force=True)
-        width_request = self.settings.base_width
-        height_request = -1
-
-        if _use_fullscreen_to_position and (layout_size := self.get_layout_size()):
-            width_request = layout_size.width
-            height_request = layout_size.height
+        # Settings is a shared instance updated in place, so keep a copy to tell later changes apart
+        self._built_settings = dict(self.settings)
+        self._applied_css: str | None = None
+        self._initial_draw_handler: int | None = None
+        # Timers from one open must not act on the next one
+        self._timers: list[scheduling.Context] = []
 
         super().__init__(
             decorated=False,
@@ -69,8 +69,6 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             title="Ulauncher - Application Launcher",
             urgency_hint=True,
             window_position=Gtk.WindowPosition.CENTER,
-            width_request=width_request,
-            height_request=height_request,
             **kwargs,
         )
         # avoid checking layer shell support for known cases it does not apply (for performance reasons)
@@ -159,19 +157,58 @@ class UlauncherWindow(Gtk.ApplicationWindow):
 
         self.set_visual(visual)
 
-        is_composited = screen.is_composited()
+    def open(self) -> None:
+        """Show the window: the first time after building it, or again after close() hid it."""
+        logger.info("Opening Ulauncher window")
+        self._cancel_timers()
+        self.is_ready = False
+        self.is_dragging = False
+        self.is_focused = False
+        self._awaiting_app_focus = False
+
+        is_composited = self.get_screen().is_composited()
         logger.debug("Screen is composited: %s", is_composited)
         if not is_composited:
             # without a compositor deferred would lead to "flash of unstyled content"
             self.apply_styling()
+        width_request = self.settings.base_width
+        height_request = -1
+        if _use_fullscreen_to_position and (layout_size := self.get_layout_size()):
+            width_request = layout_size.width
+            height_request = layout_size.height
+        self.set_size_request(width_request, height_request)
         self.position_window()
 
+        if self._initial_draw_handler is None:  # still connected if the last open closed before drawing
+            self._initial_draw_handler = self.connect("draw", self.on_initial_draw)
         self.set_keep_above(True)
         super().show()  # MUST be called before present
         self.present()
 
-        if self.query_str:
+        if self.query_str != self.prompt_input.get_text():
             self.set_input(self.query_str)
+
+    def is_outdated(self) -> bool:
+        """Whether the settings or the theme CSS changed since this window was built."""
+        settings = Settings.load(force=True)
+        if dict(settings) != self._built_settings:
+            return True
+        return self._applied_css is not None and self._applied_css != self._load_css(Theme.load(settings.theme_name))
+
+    def _load_css(self, theme: Theme) -> str | None:
+        try:
+            return theme.get_css(self._get_shadow_size())
+        except (OSError, ValueError, re.error):
+            logger.exception('Could not load theme "%s"', theme.name)
+            return None
+
+    def _start_timer(self, delay_sec: float, callback: Callable[[], None]) -> None:
+        self._timers.append(scheduling.timer(delay_sec, callback))
+
+    def _cancel_timers(self) -> None:
+        for timer in self._timers:
+            timer.cancel()
+        self._timers.clear()
 
     def _connect_signals(self, drag_listener: Gtk.EventBox) -> None:
         self.connect("focus-in-event", lambda *_: self.on_focus_in())
@@ -180,7 +217,6 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         drag_listener.connect("button-press-event", self.on_mouse_down)
         self.prompt_input.connect("changed", lambda *_: self.on_input_changed())
         self.prompt_input.connect("key-press-event", self.on_input_key_press)
-        self.connect("draw", self.on_initial_draw)
         self.prefs_btn.connect("clicked", lambda *_: self.get_app().show_preferences())
 
     def apply_styling(self) -> None:
@@ -202,7 +238,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.set_opacity(1)
 
     def deferred_init(self) -> None:
-        if not self.get_application():
+        if not self.get_application() or not self.get_visible():
             # Runs from an idle callback, so the window may already be closed.
             return
         if self.query_str:
@@ -230,7 +266,9 @@ class UlauncherWindow(Gtk.ApplicationWindow):
                 app.quit()
             return
         logger.info("Window shown")
-        self.disconnect_by_func(self.on_initial_draw)
+        if self._initial_draw_handler is not None:
+            self.disconnect(self._initial_draw_handler)
+            self._initial_draw_handler = None
         scheduling.run_when_idle(self.deferred_init)
 
     def on_focus_out(self) -> None:
@@ -238,17 +276,17 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         # give the window a chance to regain focus before it's actually closed
         self.is_focused = False
         if self.is_ready and not self.is_dragging and (self.settings.close_on_focus_out or self._awaiting_app_focus):
-            scheduling.timer(0.07, self._close_if_unfocused)
+            self._start_timer(0.07, self._close_if_unfocused)
 
     def _close_if_unfocused(self) -> None:
         # Runs from a timer, so the window may already be closed.
-        if self.is_focused or not self.get_application():
+        if self.is_focused or not self.get_visible():
             return
         self.close(save_query=not self._awaiting_app_focus)
 
     def _close_if_open(self) -> None:
         # Runs from a timer, so the window may already be closed.
-        if self.get_application():
+        if self.get_visible():
             self.close()
 
     def on_focus_in(self) -> None:
@@ -378,9 +416,13 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self._css_provider = Gtk.CssProvider()
         theme = Theme.load(self.settings.theme_name)
         try:
-            self._css_provider.load_from_data(theme.get_css(self._get_shadow_size()).encode())
+            css = theme.get_css(self._get_shadow_size())
+            self._css_provider.load_from_data(css.encode())
+            self._applied_css = css
         except (OSError, GLib.Error, ValueError, re.error):
             logger.exception('Could not apply theme "%s"', theme.name)
+            # differs from any CSS the theme loads later, so fixing the theme gets a fresh window
+            self._applied_css = ""
             fallback = Theme.load(DEFAULT_THEME)
             if fallback.name != theme.name:
                 logger.info('Falling back to theme "%s"', fallback.name)
@@ -443,15 +485,17 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         if take_activation_pending() and _activation_needs_focus and self.is_focused:
             logger.info("Waiting for the launched app to take focus")
             self._awaiting_app_focus = True
-            scheduling.timer(_APP_FOCUS_TIMEOUT_SEC, self._close_if_open)
+            self._start_timer(_APP_FOCUS_TIMEOUT_SEC, self._close_if_open)
             return
         logger.info("Closing Ulauncher window")
+        self._cancel_timers()
         if not save_query or not self.settings.auto_resume:
-            self.get_app().set_query("", update_input=False)
+            # Clears the entry and the results while still open, so the next open starts blank
+            self.get_app().set_query("")
         if self.settings.grab_mouse_pointer:
             self.toggle_grab_pointer_device(False)
-        super().close()
-        self.destroy()
+        # Hiding keeps the window for the next open. The app drops it from its open windows on "hide".
+        self.hide()
 
     def toggle_grab_pointer_device(self, grab: bool) -> None:
         if window := self.get_window():

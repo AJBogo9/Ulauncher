@@ -46,6 +46,8 @@ class UlauncherApp(Gtk.Application):
     # App-scoped query/mode controller, shared by every launcher window.
     core: UlauncherCore
     windows: WeakValueDictionary[Literal["main", "preferences"], Gtk.ApplicationWindow]
+    # The launcher window, kept while hidden. windows["main"] is only set while it is open.
+    _launcher: UlauncherWindow | None = None
     _tray_icon: ulauncher.ui.helpers.tray_icon.TrayIcon | None = None  # pyrefly: ignore[implicit-import]
 
     @staticmethod
@@ -138,13 +140,16 @@ class UlauncherApp(Gtk.Application):
             # Sync additional hold with user settings
             self.hold()
 
-            # Warm the modes so extension handlers register and enabled extensions start.
+            # Warm the modes so extension handlers register and enabled extensions start, and build the
+            # launcher window ahead of the first open.
             # Skip if a window exists - it needs to control when this runs for startup performance reasons.
-            def _warm_triggers() -> None:
+            def _warm_up() -> None:
                 if "main" not in self.windows:
                     self.core.load_triggers()
+                    if not self._launcher:
+                        self._build_launcher()
 
-            scheduling.run_when_idle(_warm_triggers)
+            scheduling.run_when_idle(_warm_up)
 
         if settings.show_tray_icon and self._persistent:
             self.toggle_tray_icon(True)
@@ -198,10 +203,34 @@ class UlauncherApp(Gtk.Application):
             logger.warning("Ignoring stale main window reference")
             del self.windows["main"]
 
-        if "main" not in self.windows:
-            main_window = UlauncherWindow(application=self)
-            main_window.connect("destroy", self._on_window_destroyed, "main")
-            self.windows["main"] = main_window
+        if "main" in self.windows:
+            return
+        # The launcher window outlives a close, which only hides it, so opening skips building the
+        # widget tree and loading the theme. Settings or theme changes still get a fresh window.
+        launcher = self._launcher
+        if launcher and launcher.is_outdated():
+            launcher.destroy()
+            launcher = None
+        if not launcher:
+            launcher = self._build_launcher()
+        self.windows["main"] = launcher
+        launcher.open()
+
+    def _build_launcher(self) -> UlauncherWindow:
+        launcher = UlauncherWindow(application=self)
+        launcher.connect("hide", self._on_launcher_closed)
+        launcher.connect("destroy", self._on_launcher_destroyed)
+        self._launcher = launcher
+        return launcher
+
+    def _on_launcher_closed(self, launcher: UlauncherWindow) -> None:
+        if self.windows.get("main") is launcher:
+            self._on_window_destroyed(launcher, "main")
+
+    def _on_launcher_destroyed(self, launcher: UlauncherWindow) -> None:
+        if self._launcher is launcher:
+            self._launcher = None
+        self._on_launcher_closed(launcher)
 
     @property
     def external_backend(self) -> str | None:
