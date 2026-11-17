@@ -85,9 +85,8 @@ class UlauncherApp(Gtk.Application):
         return self.core.handle_backspace(query_str)
 
     def window_ready(self) -> None:
-        # The window decides when this runs, to control startup performance.
+        # The window decides when this runs, to control startup performance. It runs the query after.
         self.core.load_triggers()
-        self.core.set_query(self.query, self.show_results)
 
     @events.on
     def reload_query(self) -> None:

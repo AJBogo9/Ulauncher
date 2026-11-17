@@ -34,6 +34,8 @@ _use_fullscreen_to_position = DESKTOP_ID == "GNOME" and not is_x11_compatible()
 _activation_needs_focus = DESKTOP_ID == "GNOME" and not is_x11_compatible()
 # Long enough for a running app to take focus, short enough not to hold the window up through a cold start
 _APP_FOCUS_TIMEOUT_SEC = 0.5
+# Keys that act on the results or on the query state, so a pending query must run before them
+_QUERY_FLUSH_KEYS = frozenset(("BackSpace", "Up", "Down", "Tab", "ISO_Left_Tab", "Return", "KP_Enter"))
 
 
 class UlauncherWindow(Gtk.ApplicationWindow):
@@ -56,6 +58,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self._initial_draw_handler: int | None = None
         # Timers from one open must not act on the next one
         self._timers: list[scheduling.Context] = []
+        self._pending_query: scheduling.Context | None = None
 
         super().__init__(
             decorated=False,
@@ -218,6 +221,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.prompt_input.connect("changed", lambda *_: self.on_input_changed())
         self.prompt_input.connect("key-press-event", self.on_input_key_press)
         self.prefs_btn.connect("clicked", lambda *_: self.get_app().show_preferences())
+        self.connect("destroy", lambda *_: self._cancel_pending_query())
 
     def apply_styling(self) -> None:
         """
@@ -248,6 +252,8 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.apply_styling()
         self.update_results_max_height()
         self.get_app().window_ready()
+        # Refreshes the results of a kept query, and runs whatever was typed since the window opened
+        self.run_query()
         self.is_ready = True
 
     ######################################
@@ -298,7 +304,24 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         """
         Triggered by user input
         """
+        # Keys that arrive together run one query, for the text the entry holds when the main loop is idle
+        if not self._pending_query:
+            self._pending_query = scheduling.run_when_idle(self.run_query)
+
+    def run_query(self) -> None:
+        """Run the query for the current text now, replacing a pending one."""
+        self._cancel_pending_query()
         self.get_app().query_changed(self.prompt_input.get_text())
+
+    def flush_query(self) -> None:
+        """Run the pending query now, if there is one, so the results match the typed text."""
+        if self._pending_query:
+            self.run_query()
+
+    def _cancel_pending_query(self) -> None:
+        if self._pending_query:
+            self._pending_query.cancel()
+            self._pending_query = None
 
     def activate_result(self, alt: bool) -> None:
         """
@@ -332,6 +355,9 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         if ctrl and keyname == "comma":
             self.get_app().show_preferences()
             return True
+
+        if ctrl or alt or keyname in _QUERY_FLUSH_KEYS:
+            self.flush_query()
 
         if (
             keyname == "BackSpace"
@@ -489,9 +515,13 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             return
         logger.info("Closing Ulauncher window")
         self._cancel_timers()
-        if not save_query or not self.settings.auto_resume:
+        if save_query and self.settings.auto_resume:
+            self.flush_query()  # the kept query is the whole typed text
+        else:
+            self._cancel_pending_query()
             # Clears the entry and the results while still open, so the next open starts blank
             self.get_app().set_query("")
+            self.flush_query()
         if self.settings.grab_mouse_pointer:
             self.toggle_grab_pointer_device(False)
         # Hiding keeps the window for the next open. The app drops it from its open windows on "hide".
