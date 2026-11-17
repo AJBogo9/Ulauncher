@@ -6,11 +6,9 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from ulauncher.data import Ok
 from ulauncher.gi import GioUnix
 from ulauncher.modes.apps.launch_app import launch_app
 from ulauncher.utils.settings import Settings
-from ulauncher.utils.systemd_controller import SystemdUnitStatus
 
 TERMAPP_ENTRY = """[Desktop Entry]
 Name=TermApp
@@ -66,10 +64,7 @@ def test_unrunnable_custom_terminal_falls_back_to_default(
 @pytest.fixture
 def spawn_async(mocker: MockerFixture) -> MagicMock:
     """Let the real launch_detached run and capture the child env it spawns with."""
-    mocker.patch(
-        "ulauncher.utils.launch_detached.SystemdController",
-        return_value=mocker.Mock(status=lambda: Ok(SystemdUnitStatus([]))),
-    )
+    mocker.patch("ulauncher.utils.launch_detached._runs_in_ulauncher_unit", return_value=False)
     return mocker.patch("ulauncher.utils.launch_detached.GLib.spawn_async")
 
 

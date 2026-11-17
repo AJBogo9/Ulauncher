@@ -4,11 +4,27 @@ import logging
 import os
 import sys
 
-from ulauncher.data import Err
 from ulauncher.gi import GLib
-from ulauncher.utils.systemd_controller import SystemdController
+from ulauncher.utils.lru_cache import lru_cache
 
 logger = logging.getLogger(__name__)
+
+
+def cgroup_in_unit(cgroups: str, unit: str) -> bool:
+    """Whether /proc/<pid>/cgroup content places the process in this systemd unit."""
+    return any(unit in line.rpartition(":")[2].split("/") for line in cgroups.splitlines())
+
+
+@lru_cache(maxsize=None)
+def _runs_in_ulauncher_unit() -> bool:
+    # Launched apps must leave the unit's cgroup, or stopping the unit kills them too. Asking
+    # systemctl whether the unit is active cost a blocking 7 ms subprocess on every launch, and a
+    # process stays in its cgroup for life, so read it once.
+    try:
+        with open("/proc/self/cgroup") as cgroup_file:
+            return cgroup_in_unit(cgroup_file.read(), "ulauncher.service")
+    except OSError:
+        return False
 
 
 def detach_child(_data: object | None = None) -> None:
@@ -44,8 +60,7 @@ def detach_child(_data: object | None = None) -> None:
 
 
 def launch_detached(cmd: list[str], working_dir: str | None = None, *, startup_notify_id: str | None) -> None:
-    status = SystemdController("ulauncher").status()
-    use_systemd_run = not isinstance(status, Err) and status.value.is_active
+    use_systemd_run = _runs_in_ulauncher_unit()
     if use_systemd_run:
         cmd = ["systemd-run", "--user", "--scope", *cmd]
 
