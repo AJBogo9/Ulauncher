@@ -68,8 +68,27 @@ def now() -> float:
     return time.clock_gettime(time.CLOCK_MONOTONIC)
 
 
+KEYSYM_BACKSPACE = 0xFF08
+# "<" in a word types BackSpace, so "firexyz<<<fox" is a typo and its correction
+BACKSPACE_CHAR = "<"
+
+
 def keysym(char: str) -> int:
+    if char == BACKSPACE_CHAR:
+        return KEYSYM_BACKSPACE
     return ord(char) if char != " " else 0x20
+
+
+def typed_text(keys: str) -> str:
+    """The entry's text after typing these keys."""
+    text: list[str] = []
+    for char in keys:
+        if char == BACKSPACE_CHAR:
+            if text:
+                text.pop()
+        else:
+            text.append(char)
+    return "".join(text)
 
 
 def ms(seconds: float | None) -> float | None:
@@ -503,7 +522,7 @@ def analyze(
                 match = k
                 used.add(j)
                 break
-        prefix = word[: i + 1] if char != "\n" else word
+        prefix = typed_text(word[: i + 1] if char != "\n" else word)
         render = first(renders, lambda r, p=prefix, t=t_inject: r["query"] == p and r["t0"] >= t)
         row = {
             "char": char,
