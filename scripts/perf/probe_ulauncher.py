@@ -147,6 +147,20 @@ def install_probes() -> bool:
 
         ResultsView.render = render
 
+    # The whole query: search, row rebuild and the layout it queues (layout and paint come in "frame")
+    from ulauncher.ui.app import UlauncherApp
+
+    if hasattr(UlauncherApp, "query_changed"):
+        original_query_changed = UlauncherApp.query_changed
+
+        def query_changed(self: object, query_str: str, *args: object, **kwargs: object) -> object:
+            t0 = now()
+            ret = original_query_changed(self, query_str, *args, **kwargs)
+            emit("query", t0=t0, t1=now(), text=query_str)
+            return ret
+
+        UlauncherApp.query_changed = query_changed
+
     emit("ready", t=now(), pid=os.getpid())
     return False
 

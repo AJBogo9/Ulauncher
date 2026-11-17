@@ -518,6 +518,7 @@ def analyze(
     typed_rows = key_rows[:-1]
     last_char = typed_rows[-1]
     frame_ms = [ms(f["t_after"] - f["t_before"]) for f in frames if f["t_before"] and f["t_after"] > enter[2] - 2]
+    typed_queries = [q for q in events if q["ev"] == "query" and q["text"] and q["t0"] < enter[2] + 1]
     return {
         "word": word,
         "interval_ms": round(interval * 1000),
@@ -535,6 +536,8 @@ def analyze(
         "enter_to_hidden_ms": ms(unmap["t"] - enter[2]) if unmap else None,
         "enter_to_app_focus_ms": ms(app_focus["t"] - enter[2]) if app_focus else None,
         "max_frame_ms": max((f for f in frame_ms if f is not None), default=None),
+        "queries": len(typed_queries),
+        "query_ms": [ms(q["t1"] - q["t0"]) for q in typed_queries],
     }
 
 
@@ -574,6 +577,8 @@ def summarize(label: str, trials: list[dict[str, Any]], reference: dict[str, Any
         "enter_to_hidden_ms": stats([t["enter_to_hidden_ms"] for t in trials]),
         "enter_to_app_focus_ms": stats([t["enter_to_app_focus_ms"] for t in trials]),
         "max_frame_ms": stats([t["max_frame_ms"] for t in trials]),
+        "query_ms": stats([q for t in trials for q in t.get("query_ms", [])]),
+        "queries_per_trial": stats([t.get("queries") for t in trials]),
     }
 
 
