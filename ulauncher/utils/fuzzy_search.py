@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unicodedata
-from difflib import SequenceMatcher
+from difflib import Match, SequenceMatcher
 from typing import NamedTuple
 
 from ulauncher.utils.lru_cache import lru_cache
@@ -49,6 +49,27 @@ def _normalize_with_map(text: str) -> _NormalizedText:
     return _NormalizedText("".join(chars), orig_indexes)
 
 
+# SequenceMatcher builds an index of its second sequence, which only depends on the text.
+# one matcher is kept per normalized text, so a new query does not build that index again.
+# a matcher takes about 2 kB for a typical field (the index has a list per distinct char)
+_MATCHER_LIMIT = 4000  # the fields of a few hundred apps
+_matchers: dict[str, SequenceMatcher[str]] = {}
+
+
+def _match(query: str, text: str) -> list[Match]:
+    """The blocks of `SequenceMatcher(None, query, text).get_matching_blocks()`, without the end marker."""
+    # taken out of the dict while in use: a matcher holds the query between the two calls
+    # below, and an extension that imports this module runs its handlers in threads
+    matcher = _matchers.pop(text, None) or SequenceMatcher(None, b=text)
+    matcher.set_seq1(query)
+    blocks = matcher.get_matching_blocks()[:-1]
+    # no order to evict by, a full dict starts over
+    if len(_matchers) >= _MATCHER_LIMIT:
+        _matchers.clear()
+    _matchers[text] = matcher
+    return blocks
+
+
 @lru_cache(maxsize=20000)
 def get_matching_blocks(query_str: str, text: str) -> tuple[list[tuple[int, str]], int]:
     """
@@ -57,7 +78,7 @@ def get_matching_blocks(query_str: str, text: str) -> tuple[list[tuple[int, str]
               number of characters that matched
     """
     norm_text = _normalize_with_map(text)
-    blocks = SequenceMatcher(None, _normalize(query_str), norm_text.text).get_matching_blocks()[:-1]
+    blocks = _match(_normalize(query_str), norm_text.text)
     spans: list[tuple[int, int]] = []
     total_len = 0
     for _, text_index, length in blocks:
