@@ -329,3 +329,34 @@ def test_destroy__cancels_rows_waiting_to_be_built(mocker: MockerFixture) -> Non
     view.destroy()
 
     assert pending.source is None
+
+
+def test_a_row_built_for_a_selection_scrolls_into_view_once_laid_out() -> None:
+    import time
+
+    from gi.repository import Gtk
+
+    def lay_out() -> None:
+        # the frame clock paces layout, so wait a few frames
+        for _ in range(6):
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            time.sleep(0.02)
+
+    settings = MagicMock()
+    settings.get_jump_keys.return_value = list("1234567890abcdefghij")
+    view = ResultsView(settings, lambda *_: None, lambda *_: None)
+    view.set_max_height(200)
+    window = Gtk.OffscreenWindow()
+    window.add(view)
+    window.show()
+    view.render(results_update([Result(name=f"r{i}") for i in range(20)], Query(None, "q")))
+
+    view.go_up()  # wraps to the last row before the rows past the visible height are built
+    lay_out()
+
+    last = view._widgets[-1]
+    adjustment = view.get_vadjustment()
+    assert last.result.name == "r19"
+    assert adjustment.get_value() + adjustment.get_page_size() >= last.get_allocation().y + last.get_allocated_height()
+    window.destroy()

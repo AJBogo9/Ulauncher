@@ -43,6 +43,7 @@ class ResultWidget(Gtk.EventBox):
         self._compact = result.compact
         self._wrap = result.wrap
         self._descr_label: Gtk.Label | None = None
+        self._scroll_on_allocate: int | None = None
         text_scaling_factor = get_text_scaling_factor()
         self._icon_size = 25 if result.compact else 40
         icon_box = 25 if result.compact else 50
@@ -156,15 +157,27 @@ class ResultWidget(Gtk.EventBox):
         viewport = self.get_ancestor(Gtk.Viewport)
         if not viewport or not isinstance(viewport, Gtk.Viewport):
             return
+        allocation = self.get_allocation()
+        if allocation.y < 0:
+            # A row built since the last layout has GTK's placeholder allocation, so scroll once it is laid out
+            if self._scroll_on_allocate is None:
+                self._scroll_on_allocate = self.connect("size-allocate", self._scroll_after_allocate)
+            return
         viewport_height = viewport.get_allocation().height
         adjustment = viewport.get_vadjustment()
         scroll_y = adjustment.get_value()
-        allocation = self.get_allocation()
         bottom = allocation.y + allocation.height
         if scroll_y > allocation.y:  # Scroll up if the widget is above visible area
             adjustment.set_value(allocation.y)
         elif viewport_height + scroll_y < bottom:  # Scroll down if the widget is below visible area
             adjustment.set_value(bottom - viewport_height)
+
+    def _scroll_after_allocate(self, *_args: object) -> None:
+        if self._scroll_on_allocate is not None:
+            self.disconnect(self._scroll_on_allocate)
+            self._scroll_on_allocate = None
+        if self.item_box.get_style_context().has_class("selected"):
+            self.scroll_to_focus()
 
     def highlight_name(self) -> bool:
         """Show the name, with the parts matching the query highlighted. Returns True if it added labels."""
