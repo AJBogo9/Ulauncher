@@ -278,10 +278,14 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         scheduling.run_when_idle(self.deferred_init)
 
     def on_focus_out(self) -> None:
+        self.is_focused = False
+        if self._awaiting_app_focus:
+            # The launched app took focus, which is what the window waited for
+            self.close()
+            return
         # The WM can briefly take focus away when a global hotkey fires, so delay the close to
         # give the window a chance to regain focus before it's actually closed
-        self.is_focused = False
-        if self.is_ready and not self.is_dragging and (self.settings.close_on_focus_out or self._awaiting_app_focus):
+        if self.is_ready and not self.is_dragging and self.settings.close_on_focus_out:
             self._start_timer(0.07, self._close_if_unfocused)
 
     def _close_if_unfocused(self) -> None:

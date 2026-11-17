@@ -34,6 +34,11 @@ class FakeApp:
     def handle_backspace(self, _query_str: str) -> bool:
         return False
 
+    def set_query(self, value: str, update_input: bool = True) -> None:
+        self.query = value
+        if update_input and self.window:
+            self.window.set_input(value)
+
 
 @pytest.fixture
 def window(mocker: MockerFixture) -> Any:
@@ -91,3 +96,27 @@ def test_navigation__acts_on_results_for_the_whole_text(window: Any, keyname: st
     assert press(window, keyname)
 
     assert window.get_app().queries == ["fire"]
+
+
+def test_focus_out__closes_at_once_when_the_launched_app_takes_focus(window: Any, mocker: MockerFixture) -> None:
+    timer = mocker.patch("ulauncher.ui.ulauncher_window.scheduling.timer")
+    window.show()
+    window.is_ready = True
+    window._awaiting_app_focus = True
+
+    window.on_focus_out()
+
+    assert not window.get_visible()
+    timer.assert_not_called()
+
+
+def test_focus_out__waits_before_closing_otherwise(window: Any, mocker: MockerFixture) -> None:
+    """The compositor can take focus away for a moment around the hotkey."""
+    timer = mocker.patch("ulauncher.ui.ulauncher_window.scheduling.timer")
+    window.show()
+    window.is_ready = True
+
+    window.on_focus_out()
+
+    assert window.get_visible()
+    timer.assert_called_once()
