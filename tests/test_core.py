@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Iterator
 from unittest.mock import MagicMock, PropertyMock
 
 from pytest_mock import MockerFixture
@@ -47,3 +47,39 @@ class TestStreamingResults:
         core.activate_result(Result(name="a"), MagicMock(), alt=True)
         captured[0]()  # the stale flush fires after activation
         render.assert_not_called()
+
+
+def test_load_triggers__hands_a_dropped_keyword_to_the_mode_that_lost_it(mocker: MockerFixture) -> None:
+    from ulauncher.internals.result import KeywordTrigger
+    from ulauncher.modes.mode import Mode
+
+    class KeywordMode(Mode):
+        def __init__(self, keywords: list[str]) -> None:
+            self.keywords = keywords
+            self.changed = True
+
+        def handle_query(self, _query: Query, _callback: Callable[[effects.EffectMessage], None]) -> None: ...
+
+        def activate_result(
+            self, _action_id: str, _result: Result, _query: Query, _callback: Callable[[effects.EffectMessage], None]
+        ) -> None: ...
+
+        def has_trigger_changes(self) -> bool:
+            return self.changed
+
+        def get_triggers(self) -> Iterator[KeywordTrigger]:
+            self.changed = False
+            for keyword in self.keywords:
+                yield KeywordTrigger(name=f"{keyword} from {id(self)}", keyword=keyword)
+
+    first, second = KeywordMode(["g"]), KeywordMode(["g"])
+    mocker.patch("ulauncher.core.get_modes", return_value=[first, second])
+    core = UlauncherCore()
+    core.load_triggers()
+    assert core._keyword_cache[first] == {"g": mocker.ANY}
+
+    first.keywords = []  # e.g. the shortcut "g" was deleted
+    first.changed = True
+    core.load_triggers()
+
+    assert "g" in core._keyword_cache[second]

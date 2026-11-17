@@ -66,18 +66,15 @@ class UlauncherCore:
         return QueryHistory.load().get(str(self.query))
 
     def load_triggers(self, force: bool = False) -> None:
-        """Load or refresh triggers from modes that have changes."""
+        """Load the triggers of every mode again if any mode has changes."""
+        modes = get_modes()
+        # All modes, not just the changed ones: a keyword one mode drops may belong to another mode
+        # whose claim lost to it in an earlier load
+        if not force and not any(mode.has_trigger_changes() for mode in modes):
+            return
         claimed_keywords: dict[str, Result] = {}
-        outdated_modes: set[Mode] = set()
 
-        # load claimed keywords and modes that need to be refreshed
-        for mode in get_modes():
-            if force or mode.has_trigger_changes():
-                outdated_modes.add(mode)
-            else:
-                claimed_keywords.update(self._keyword_cache[mode])
-
-        for mode in outdated_modes:
+        for mode in modes:
             triggers = self._trigger_cache[mode]
             keywords = self._keyword_cache[mode]
             triggers.clear()
