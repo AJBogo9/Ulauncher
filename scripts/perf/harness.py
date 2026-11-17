@@ -557,9 +557,10 @@ def analyze(
         "queries": len(typed_queries),
         "query_ms": [ms(q["t1"] - q["t0"]) for q in typed_queries],
         "paint_ms": paint_ms,
-        "gc_ms": [ms(g["t1"] - g["t0"]) for g in events if g["ev"] == "gc" and g["t0"] < enter[2] + 1],
+        # from the toggle to Enter, when a collection delays what the user sees
+        "gc_ms": [ms(g["t1"] - g["t0"]) for g in events if g["ev"] == "gc" and g["t0"] < enter[2]],
         "gc2_ms": [
-            ms(g["t1"] - g["t0"]) for g in events if g["ev"] == "gc" and g["generation"] == 2 and g["t0"] < enter[2] + 1
+            ms(g["t1"] - g["t0"]) for g in events if g["ev"] == "gc" and g["generation"] == 2 and g["t0"] < enter[2]
         ],
     }
 
