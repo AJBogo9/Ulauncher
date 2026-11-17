@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import re
@@ -550,6 +551,9 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         finally:
             # Hiding keeps the window for the next open. The app drops it from its open windows on "hide".
             self.hide()
+        # A full collection walks every long-lived object, which the kept window, its rows and the
+        # search caches make 10 to 20 ms. Run it while nobody types, so the automatic ones come rarely.
+        scheduling.run_when_idle(gc.collect)
 
     def toggle_grab_pointer_device(self, grab: bool) -> None:
         if window := self.get_window():

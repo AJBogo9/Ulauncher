@@ -182,3 +182,17 @@ def test_is_outdated__after_a_layout_input_changed(window: Any, mocker: MockerFi
         mocker.patch("ulauncher.ui.ulauncher_window.get_text_scaling_factor", return_value=3.25)
 
     assert window.is_outdated()
+
+
+def test_close__collects_garbage_once_idle(window: Any, mocker: MockerFixture) -> None:
+    """A full collection walks every long-lived object; done after a close, it stays out of typing."""
+    collect = mocker.patch("ulauncher.ui.ulauncher_window.gc.collect")
+    window.open()
+    run_idle()
+    collect.reset_mock()
+
+    window.close()
+    collect.assert_not_called()
+    run_idle()
+
+    collect.assert_called_once_with()
