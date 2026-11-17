@@ -32,6 +32,9 @@ class FakeApp:
     def activate_result(self, result: Result, _alt: bool) -> None:
         self.activated.append(result.name)
 
+    def window_ready(self) -> None:
+        pass
+
     def handle_backspace(self, query_str: str) -> bool:
         self.backspaced.append(query_str)
         return False
@@ -216,3 +219,63 @@ def test_backspace__asks_about_the_typed_text_while_a_query_is_pending(window: A
     press(window, "BackSpace")
 
     assert window.get_app().backspaced == ["~/Doc"]
+
+
+class FakeTheme:
+    name = "fake"
+
+    def __init__(self, css: str | Exception) -> None:
+        self.css = css
+
+    def get_css(self, _shadow_size: int) -> str:
+        if isinstance(self.css, Exception):
+            raise self.css
+        return self.css
+
+
+@pytest.fixture
+def theme(mocker: MockerFixture) -> FakeTheme:
+    theme = FakeTheme(".app { color: red; }")
+    mocker.patch("ulauncher.ui.ulauncher_window.Theme.load", return_value=theme)
+    return theme
+
+
+def open_fully(window: Any, mocker: MockerFixture) -> None:
+    """Open, then run what the first frame triggers."""
+    window.open()
+    mocker.patch.object(window, "get_application", return_value=window.get_app())
+    window.deferred_init()
+
+
+def test_is_outdated__does_not_load_the_theme(window: Any, mocker: MockerFixture, theme: FakeTheme) -> None:
+    """Loading a theme scans the theme folders and reads its CSS, about 1 ms before the window shows."""
+    open_fully(window, mocker)
+    window.close()
+    load = mocker.patch("ulauncher.ui.ulauncher_window.Theme.load", return_value=theme)
+
+    assert not window.is_outdated()
+
+    load.assert_not_called()
+
+
+def test_open__applies_theme_css_edited_since_the_last_open(
+    window: Any, mocker: MockerFixture, theme: FakeTheme
+) -> None:
+    open_fully(window, mocker)
+    window.close()
+    theme.css = ".app { color: blue; }"
+
+    open_fully(window, mocker)
+
+    assert "rgb(0,0,255)" in window._css_provider.to_string()
+
+
+def test_open__logs_a_broken_theme_once(
+    window: Any, mocker: MockerFixture, theme: FakeTheme, caplog: pytest.LogCaptureFixture
+) -> None:
+    theme.css = OSError("theme folder gone")
+    for _ in range(3):
+        open_fully(window, mocker)
+        window.close()
+
+    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1

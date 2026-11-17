@@ -55,7 +55,8 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.settings = Settings.load(force=True)
         # Settings is a shared instance updated in place, so keep a copy to tell later changes apart
         self._built_settings = dict(self.settings)
-        self._applied_css: str | None = None
+        # The theme CSS last loaded, kept even when GTK rejected it, or None if it could not be read
+        self._theme_css: str | None = None
         self._styled_scale: int | None = None
         self._initial_draw_handler: int | None = None
         # Timers from one open must not act on the next one
@@ -201,21 +202,19 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self.set_input(self.query_str)
 
     def is_outdated(self) -> bool:
-        """Whether anything the window was built or styled with has changed: settings, theme CSS,
-        compositing, text or display scaling."""
+        """Whether anything the window was built or styled with has changed: settings, compositing,
+        text or display scaling. Theme files edited in place only need the CSS reloaded, which
+        deferred_init does after the first frame."""
         settings = Settings.load(force=True)
         if dict(settings) != self._built_settings or self._layout_inputs() != self._built_layout:
             return True
-        if self._styled_scale is not None and self.get_scale_factor() != self._styled_scale:
-            return True
-        return self._applied_css is not None and self._applied_css != self._load_css(Theme.load(settings.theme_name))
+        return self._styled_scale is not None and self.get_scale_factor() != self._styled_scale
 
     def _load_css(self, theme: Theme) -> str | None:
         try:
             return theme.get_css(self._get_shadow_size())
         except (OSError, ValueError, re.error):
-            logger.exception('Could not load theme "%s"', theme.name)
-            return None
+            return None  # apply_theme logs it, once per change of the theme's CSS
 
     def _start_timer(self, delay_sec: float, callback: Callable[[], None]) -> None:
         self._timers.append(scheduling.timer(delay_sec, callback))
@@ -262,7 +261,11 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             # select all text in the input field.
             # used when user turns off "start with blank query" setting
             self.prompt_input.select_region(0, -1)
-        self.apply_styling()
+        if self.get_opacity() == 1:  # styled in an earlier open, so pick up theme files edited since
+            if self._load_css(Theme.load(self.settings.theme_name)) != self._theme_css:
+                self.apply_theme()
+        else:
+            self.apply_styling()
         self.update_results_max_height()
         self.get_app().window_ready()
         # Refreshes the results of a kept query, and runs whatever was typed since the window opened
@@ -464,14 +467,14 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         if not self._css_provider:
             self._css_provider = Gtk.CssProvider()
         theme = Theme.load(self.settings.theme_name)
+        self._theme_css = None
         try:
             css = theme.get_css(self._get_shadow_size())
+            # Kept before GTK parses it, so a theme GTK rejects is not reloaded and logged on every open
+            self._theme_css = css
             self._css_provider.load_from_data(css.encode())
-            self._applied_css = css
         except (OSError, GLib.Error, ValueError, re.error):
             logger.exception('Could not apply theme "%s"', theme.name)
-            # differs from any CSS the theme loads later, so fixing the theme gets a fresh window
-            self._applied_css = ""
             fallback = Theme.load(DEFAULT_THEME)
             if fallback.name != theme.name:
                 logger.info('Falling back to theme "%s"', fallback.name)
