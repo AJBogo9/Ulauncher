@@ -120,3 +120,65 @@ def test_focus_out__waits_before_closing_otherwise(window: Any, mocker: MockerFi
 
     assert window.get_visible()
     timer.assert_called_once()
+
+
+def test_open__gives_the_entry_keyboard_focus_back(window: Any) -> None:
+    """A kept window remembers its focus widget, e.g. the preferences button after a click on it."""
+    window.open()
+    window.prefs_btn.grab_focus()
+    window.close()
+
+    window.open()
+
+    assert window.get_focus() is window.prompt_input
+
+
+def test_close__clears_results_when_the_entry_is_already_empty(window: Any) -> None:
+    window.open()
+    type_text(window, "f")
+    window.flush_query()
+    window.prompt_input.set_text("")  # BackSpace, then Escape before the query for "" ran
+
+    window.close(save_query=True)
+
+    assert not window.results_view.has_results
+
+
+def test_close__hides_even_if_clearing_the_query_raises(window: Any, mocker: MockerFixture) -> None:
+    window.open()
+    mocker.patch.object(window.get_app(), "set_query", side_effect=RuntimeError("from a mode"))
+
+    with pytest.raises(RuntimeError):
+        window.close()
+
+    assert not window.get_visible()
+
+
+def test_enter__acts_on_the_input_a_mode_rewrote_while_flushing(window: Any) -> None:
+    app = window.get_app()
+    answer = app.query_changed
+
+    def fold_home(query_str: str) -> None:
+        # like the file browser, which rewrites /home/<user>/... to ~/... and renders after
+        if query_str.startswith("/home/user/"):
+            app.set_query("~/" + query_str.removeprefix("/home/user/"))
+            return
+        answer(query_str)
+
+    app.query_changed = fold_home
+    type_text(window, "/home/user/x")
+
+    assert press(window, "Return")
+
+    assert app.activated == ["result for ~/x"]
+
+
+@pytest.mark.parametrize("change", ["shadow", "text_scaling"])
+def test_is_outdated__after_a_layout_input_changed(window: Any, mocker: MockerFixture, change: str) -> None:
+    assert not window.is_outdated()
+    if change == "shadow":
+        mocker.patch.object(window, "_get_shadow_size", return_value=window._get_shadow_size() + 7)
+    else:
+        mocker.patch("ulauncher.ui.ulauncher_window.get_text_scaling_factor", return_value=3.25)
+
+    assert window.is_outdated()

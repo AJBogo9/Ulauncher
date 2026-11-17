@@ -13,7 +13,7 @@ from ulauncher import paths
 from ulauncher.gi import GLib
 from ulauncher.internals.results_update import ResultsUpdate
 from ulauncher.ui.helpers import layer_shell
-from ulauncher.ui.helpers.monitor import get_monitor, get_monitor_geometries
+from ulauncher.ui.helpers.monitor import get_monitor, get_monitor_geometries, get_text_scaling_factor
 from ulauncher.ui.helpers.theme import DEFAULT_THEME, Theme
 from ulauncher.ui.load_icon_surface import load_icon_surface
 from ulauncher.ui.results_view import ResultsView
@@ -55,6 +55,7 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         # Settings is a shared instance updated in place, so keep a copy to tell later changes apart
         self._built_settings = dict(self.settings)
         self._applied_css: str | None = None
+        self._styled_scale: int | None = None
         self._initial_draw_handler: int | None = None
         # Timers from one open must not act on the next one
         self._timers: list[scheduling.Context] = []
@@ -159,6 +160,11 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             visual = screen.get_system_visual()
 
         self.set_visual(visual)
+        # Read once while building: the shadow margin and the result rows' margins
+        self._built_layout = self._layout_inputs()
+
+    def _layout_inputs(self) -> tuple[int, float]:
+        return self._get_shadow_size(), get_text_scaling_factor()
 
     def open(self) -> None:
         """Show the window: the first time after building it, or again after close() hid it."""
@@ -184,6 +190,8 @@ class UlauncherWindow(Gtk.ApplicationWindow):
 
         if self._initial_draw_handler is None:  # still connected if the last open closed before drawing
             self._initial_draw_handler = self.connect("draw", self.on_initial_draw)
+        # A kept window keeps its focus widget, which a click can move to the preferences button
+        self.prompt_input.grab_focus_without_selecting()
         self.set_keep_above(True)
         super().show()  # MUST be called before present
         self.present()
@@ -192,9 +200,12 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             self.set_input(self.query_str)
 
     def is_outdated(self) -> bool:
-        """Whether the settings or the theme CSS changed since this window was built."""
+        """Whether anything the window was built or styled with has changed: settings, theme CSS,
+        compositing, text or display scaling."""
         settings = Settings.load(force=True)
-        if dict(settings) != self._built_settings:
+        if dict(settings) != self._built_settings or self._layout_inputs() != self._built_layout:
+            return True
+        if self._styled_scale is not None and self.get_scale_factor() != self._styled_scale:
             return True
         return self._applied_css is not None and self._applied_css != self._load_css(Theme.load(settings.theme_name))
 
@@ -235,7 +246,8 @@ class UlauncherWindow(Gtk.ApplicationWindow):
         self.theme_root.get_style_context().add_class("app")
         self.prompt_input.get_style_context().add_class("input")
         self.prefs_btn.get_style_context().add_class("prefs-btn")
-        prefs_icon_surface = load_icon_surface(f"{paths.ASSETS}/icons/gear.svg", 16, self.get_scale_factor())
+        self._styled_scale = self.get_scale_factor()
+        prefs_icon_surface = load_icon_surface(f"{paths.ASSETS}/icons/gear.svg", 16, self._styled_scale)
         self.prefs_btn.set_image(Gtk.Image.new_from_surface(prefs_icon_surface))
 
         self.apply_theme()
@@ -319,7 +331,11 @@ class UlauncherWindow(Gtk.ApplicationWindow):
 
     def flush_query(self) -> None:
         """Run the pending query now, if there is one, so the results match the typed text."""
-        if self._pending_query:
+        # A query can rewrite the input (the file browser folds paths), which queues another one.
+        # Bounded, in case a mode keeps rewriting.
+        for _ in range(3):
+            if not self._pending_query:
+                return
             self.run_query()
 
     def _cancel_pending_query(self) -> None:
@@ -519,17 +535,21 @@ class UlauncherWindow(Gtk.ApplicationWindow):
             return
         logger.info("Closing Ulauncher window")
         self._cancel_timers()
-        if save_query and self.settings.auto_resume:
-            self.flush_query()  # the kept query is the whole typed text
-        else:
-            self._cancel_pending_query()
-            # Clears the entry and the results while still open, so the next open starts blank
-            self.get_app().set_query("")
-            self.flush_query()
-        if self.settings.grab_mouse_pointer:
-            self.toggle_grab_pointer_device(False)
-        # Hiding keeps the window for the next open. The app drops it from its open windows on "hide".
-        self.hide()
+        try:
+            if save_query and self.settings.auto_resume:
+                self.flush_query()  # the kept query is the whole typed text
+            else:
+                # Clears the entry and the results while still open, so the next open starts blank.
+                # Runs the query even when the entry is empty already, since its results may not be.
+                self.get_app().set_query("", update_input=False)
+                self._cancel_pending_query()
+                self.set_input("")
+                self.run_query()
+            if self.settings.grab_mouse_pointer:
+                self.toggle_grab_pointer_device(False)
+        finally:
+            # Hiding keeps the window for the next open. The app drops it from its open windows on "hide".
+            self.hide()
 
     def toggle_grab_pointer_device(self, grab: bool) -> None:
         if window := self.get_window():
