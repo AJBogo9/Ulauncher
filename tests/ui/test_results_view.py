@@ -267,3 +267,50 @@ class TestResultsViewVisibleRowsFirst:
         self._run_idle()
 
         assert [w.result.name for w in view._widgets] == ["r0", "r1", "r2"]
+
+
+class TestResultsViewRowReuse:
+    @pytest.fixture(autouse=True)
+    def _no_scroll(self, mocker: MockerFixture) -> None:
+        mocker.patch("ulauncher.ui.result_widget.ResultWidget.scroll_to_focus")
+
+    @pytest.fixture
+    def view(self) -> ResultsView:
+        settings = MagicMock()
+        settings.get_jump_keys.return_value = list("12345")
+        return ResultsView(settings, lambda *_: None, lambda *_: None)
+
+    @staticmethod
+    def _update(names: list[str], query: str = "q") -> ResultsUpdate:
+        return results_update([Result(name=name, searchable=True) for name in names], Query(None, query))
+
+    def test_a_new_query_reuses_the_rows(self, view: ResultsView) -> None:
+        view.render(self._update(["a", "b", "c"], "q1"))
+        rows = list(view._widgets)
+
+        view.render(self._update(["d", "e"], "q2"))
+
+        assert view._widgets == rows[:2]
+        assert [w.result.name for w in view._widgets] == ["d", "e"]
+        assert not rows[2].get_visible()
+
+    def test_a_longer_list_reuses_rows_and_adds_the_missing_ones(self, view: ResultsView) -> None:
+        view.render(self._update(["a"], "q1"))
+        first = view._widgets[0]
+
+        view.render(self._update(["b", "c", "d"], "q2"))
+
+        assert view._widgets[0] is first
+        assert [w.result.name for w in view._widgets] == ["b", "c", "d"]
+        assert all(w.get_visible() for w in view._widgets)
+        assert view._box.get_children() == view._rows
+        assert [w.result.name for w in view._rows if w.get_visible()] == ["b", "c", "d"]
+
+    def test_selection_moves_to_the_new_first_result(self, view: ResultsView) -> None:
+        view.render(self._update(["a", "b", "c"], "q1"))
+        view.go_down()
+
+        view.render(self._update(["d", "e", "f"], "q2"))
+
+        selected = [w.result.name for w in view._widgets if "selected" in w.item_box.get_style_context().list_classes()]
+        assert selected == ["d"]

@@ -43,7 +43,10 @@ class ResultsView(Gtk.ScrolledWindow):
         self._settings = settings
         self._apply_css = apply_css
         self._activate_result = activate_result
+        # The rows that show the current results: the first ones of _rows
         self._widgets: list[ResultWidget] = []
+        # Every row in the box, in order. Rows are reused for later queries and hidden while unused.
+        self._rows: list[ResultWidget] = []
         # Results after the built rows, built when idle or as soon as something needs them
         self._unbuilt: list[Result] = []
         self._unbuilt_query: Query | None = None
@@ -52,6 +55,11 @@ class ResultsView(Gtk.ScrolledWindow):
         self._box.get_style_context().add_class("result-box")
         self._box.connect("size-allocate", self._fit_results_height)
         self.add(self._box)
+        # Once, while the box is empty: rows get the CSS as they are built, and adding it again to
+        # every reused row would restyle them all
+        self._apply_css(self._box)
+        # rows manage their own visibility, so this is the only show_all
+        self.show_all()
 
     @property
     def has_results(self) -> bool:
@@ -92,7 +100,6 @@ class ResultsView(Gtk.ScrolledWindow):
     def _replace_results(self, update: ResultsUpdate) -> None:
         previous_pick = self.get_active_result() if self._user_selected else None
         self._drop_unbuilt()
-        self._box.foreach(lambda w: w.destroy())
         self._widgets = []
         self._index = 0
 
@@ -112,14 +119,15 @@ class ResultsView(Gtk.ScrolledWindow):
 
         self._box.set_margin_bottom(10)
         self._box.set_margin_top(3)
-        self._apply_css(self._box)  # the box is empty here; each row gets the CSS as it is built
         self._unbuilt = list(result_list)
         self._unbuilt_query = update["query"]
         self._build_visible_rows()
+        for row in self._rows[len(self._widgets) :]:
+            row.hide()
         if self._unbuilt:
             self._pending_rows = scheduling.run_when_idle(self._build_rows_when_idle)
         self._apply_selection(update["selected_name"], previous_pick)
-        self.show_all()
+        self.show()
         logger.debug("Render %s results", len(self._widgets))
 
     def _append_results(self, update: ResultsUpdate) -> None:
@@ -134,26 +142,45 @@ class ResultsView(Gtk.ScrolledWindow):
         # keep the user's pick; only (re)evaluate the default when they haven't navigated
         if not self._user_selected:
             self._apply_selection(update["selected_name"], None)
-        self.show_all()
+        self.show()
 
     def _build_rows(self, count: int) -> list[ResultWidget]:
-        """Build the next `count` unbuilt results into rows."""
-        from ulauncher.ui.result_widget import ResultWidget
-
+        """Show the next `count` unbuilt results, in reused rows where the layout allows it."""
         query = self._unbuilt_query
         if query is None:  # nothing was ever queued
             return []
-        jump_keys = self._settings.get_jump_keys()
         built = []
         for result in self._unbuilt[:count]:
-            widget = ResultWidget(result, len(self._widgets), query, self.select, self._select_and_activate, jump_keys)
+            index = len(self._widgets)
+            reusable = self._rows[index] if index < len(self._rows) else None
+            if reusable and reusable.can_show(result):
+                widget = reusable
+                if widget.update(result, index, query):
+                    self._apply_css(widget)
+                widget.show()
+            else:
+                widget = self._new_row(result, index, query)
             self._widgets.append(widget)
-            self._box.add(widget)
-            self._apply_css(widget)
-            widget.show_all()
             built.append(widget)
         del self._unbuilt[:count]
         return built
+
+    def _new_row(self, result: Result, index: int, query: Query) -> ResultWidget:
+        from ulauncher.ui.result_widget import ResultWidget
+
+        widget = ResultWidget(
+            result, index, query, self.select, self._select_and_activate, self._settings.get_jump_keys()
+        )
+        self._box.add(widget)
+        if index < len(self._rows):  # replaces a row with another layout
+            self._box.reorder_child(widget, index)
+            self._rows[index].destroy()
+            self._rows[index] = widget
+        else:
+            self._rows.append(widget)
+        self._apply_css(widget)
+        widget.show_all()
+        return widget
 
     def _build_visible_rows(self) -> None:
         """Build rows until they fill the visible height, or all of them if there is no limit."""

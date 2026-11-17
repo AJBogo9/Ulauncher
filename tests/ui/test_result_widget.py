@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import cast
 from unittest.mock import MagicMock
 
@@ -77,3 +79,87 @@ class TestResultWidget:
         assert len(children) == 1
         assert cast("Gtk.Label", children[0]).get_text() == "wrapped name"
         assert not any("item-highlight" in c.get_style_context().list_classes() for c in children)
+
+
+def _visible_content(widget: ResultWidget) -> dict[str, object]:
+    """What a row shows, ignoring hidden widgets a reused row keeps for later."""
+    from gi.repository import Gtk
+
+    def labels(container: Gtk.Container) -> list[tuple[str, bool, object, bool]]:
+        return [
+            (
+                child.get_text(),
+                "item-highlight" in child.get_style_context().list_classes(),
+                child.get_ellipsize(),
+                child.get_line_wrap(),
+            )
+            for child in container.get_children()
+            if isinstance(child, Gtk.Label) and child.get_visible()
+        ]
+
+    return {
+        "title": labels(widget.title_box),
+        "text": labels(widget.text_container),
+        "title_expands": widget.text_container.child_get_property(widget.title_box, "expand"),
+        "shortcut": widget.shortcut_label.get_text(),
+        "icon": widget._icon.props.surface,
+        "index": widget.index,
+        "result": widget.result,
+        "selected": "selected" in widget.item_box.get_style_context().list_classes(),
+    }
+
+
+class TestResultWidgetUpdate:
+    @pytest.fixture(autouse=True)
+    def scroll_to_focus(self, mocker: MockerFixture) -> MagicMock:
+        return mocker.patch("ulauncher.ui.result_widget.ResultWidget.scroll_to_focus")
+
+    @pytest.mark.parametrize(
+        ("before", "after", "query"),
+        [
+            pytest.param(
+                Result(name="Firefox", searchable=True), Result(name="Files", searchable=True), "fi", id="names"
+            ),
+            pytest.param(
+                Result(name="Terminal", description="Use the command line", searchable=True),
+                Result(name="Text Editor", searchable=True),
+                "te",
+                id="drops_description",
+            ),
+            pytest.param(
+                Result(name="Text Editor", searchable=True),
+                Result(name="Terminal", description="Use the command line", searchable=True),
+                "te",
+                id="adds_description",
+            ),
+            pytest.param(
+                Result(name="a b c d e", searchable=True),
+                Result(name="abcde", searchable=True),
+                "ace",
+                id="fewer_highlight_segments",
+            ),
+            pytest.param(Result(name="x"), Result(name="Settings", searchable=True), "sts", id="more_segments"),
+            pytest.param(Result(name="Firefox", searchable=True), Result(name="Plain"), "fi", id="not_highlighted"),
+        ],
+    )
+    def test_update__shows_what_a_new_row_would(self, before: Result, after: Result, query: str) -> None:
+        row = ResultWidget(before, 3, Query(None, "f"), noop, noop, JUMP_KEYS)
+        row.select()
+
+        row.update(after, 1, Query(None, query))
+
+        fresh = ResultWidget(after, 1, Query(None, query), noop, noop, JUMP_KEYS)
+        assert _visible_content(row) == _visible_content(fresh)
+
+    @pytest.mark.parametrize(
+        ("before", "after"),
+        [
+            (Result(name="a"), Result(name="a", compact=True)),
+            (Result(name="a"), Result(name="a", wrap=True)),
+            (Result(name="a", wrap=True), Result(name="a")),
+        ],
+    )
+    def test_can_show__only_results_with_the_same_layout(self, before: Result, after: Result) -> None:
+        row = ResultWidget(before, 0, Query(None, ""), noop, noop, JUMP_KEYS)
+        assert not row.can_show(after)
+        assert row.can_show(before)
