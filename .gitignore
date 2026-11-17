@@ -34,3 +34,4 @@ data/preferences
 /nix/dev
 /result
 ulauncher.1.gz
+.perf/
