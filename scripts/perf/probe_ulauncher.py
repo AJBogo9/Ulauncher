@@ -20,6 +20,8 @@ import time
 TREE = os.environ["ULH_TREE"]
 LOG = open(os.environ["ULH_PROBE_LOG"], "a", buffering=1)  # noqa: SIM115
 FAKE_LAUNCH = os.environ.get("ULH_FAKE_LAUNCH")  # argv (json) of the app started in place of the real one
+# Measurement-only variants, chosen per tree with harness.py --tree label=path+experiment
+EXPERIMENTS = set(filter(None, os.environ.get("ULH_EXPERIMENTS", "").split("+")))
 
 
 def now() -> float:
@@ -35,7 +37,7 @@ sys.path.insert(0, TREE)
 
 
 def install_probes() -> bool:
-    from gi.repository import Gdk, GObject, Gtk
+    from gi.repository import Gdk, GLib, GObject, Gtk
 
     # strong references, so a recreated window never reuses an address and looks hooked already
     hooked_clocks: list[Gdk.FrameClock] = []
@@ -62,16 +64,34 @@ def install_probes() -> bool:
         def phase(key: str) -> None:
             frame[key] = now()
 
+        # frames whose presentation time (from the compositor's presentation feedback) is still unknown
+        unpresented: list[int] = []
+
+        def report_presented() -> bool:
+            for counter in list(unpresented):
+                timings = clock.get_timings(counter)
+                if timings is None:  # dropped from GDK's history
+                    unpresented.remove(counter)
+                elif timings.get_complete():
+                    unpresented.remove(counter)
+                    if presented_us := timings.get_presentation_time():
+                        emit("presented", win=name, counter=counter, t=presented_us / 1e6)
+            return False
+
         def after_paint(*_: object) -> None:
+            counter = clock.get_frame_counter()
             emit(
                 "frame",
                 win=name,
+                counter=counter,
                 t_before=frame.get("before"),
                 t_layout=frame.get("layout"),
                 t_paint=frame.get("paint"),
                 t_after=now(),
             )
             frame.clear()
+            unpresented.append(counter)
+            GLib.timeout_add(50, report_presented)
 
         clock.connect("before-paint", lambda *_: phase("before"))
         clock.connect("layout", lambda *_: phase("layout"))
@@ -118,6 +138,14 @@ def install_probes() -> bool:
     def on_changed(entry: Gtk.Entry, *_: object) -> bool:
         emit("changed", t=now(), text=entry.get_text())
         return True
+
+    from gi.repository import Gio
+
+    def on_action(action: Gio.SimpleAction, *_: object) -> bool:
+        emit("action", t=now(), name=action.get_name())
+        return True
+
+    GObject.add_emission_hook(Gio.SimpleAction, "activate", on_action)
 
     # GtkEditable's signals are registered when GtkEntry's class is first initialized
     Gtk.Entry().destroy()
@@ -191,6 +219,11 @@ def main() -> int:
     from ulauncher.gi import GLib
 
     install_launch_stub()
+    if "nofullscreen" in EXPERIMENTS:
+        # size the window to its content instead of covering the monitor (GNOME Wayland positioning)
+        import ulauncher.ui.ulauncher_window as window_module
+
+        window_module._use_fullscreen_to_position = False  # noqa: SLF001
     # GTK installs its own event handler during gtk_init, which runs inside app.run(), so the probes
     # go in from the first main loop iteration
     GLib.idle_add(install_probes, priority=GLib.PRIORITY_HIGH)

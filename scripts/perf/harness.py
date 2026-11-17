@@ -372,6 +372,7 @@ class Launcher:
     session: Session
     label: str
     tree: Path
+    experiments: str = ""
 
     def start(self) -> None:
         if self.session.has_name(UL_BUS):
@@ -386,6 +387,7 @@ class Launcher:
             ),
             "ULAUNCHER_SYSTEM_DATA_DIR": str(self.tree / "data"),
             "PYTHONPATH": str(self.tree),
+            "ULH_EXPERIMENTS": self.experiments,
         }
         self.proc = self.session.spawn(
             [str(VENV_PYTHON), str(HERE / "probe_ulauncher.py")], env, f"ulauncher-{self.label}.log"
@@ -474,11 +476,20 @@ def analyze(
     keys = [e for e in events if e["ev"] == "key" and e["win"] == LAUNCHER_WIN]
     renders = [e for e in events if e["ev"] == "render"]
 
+    presented = {e["counter"]: e["t"] for e in events if e["ev"] == "presented" and e["win"] == LAUNCHER_WIN}
+
     def painted_after(t: float) -> float | None:
         frame = first(frames, lambda f: f["t_after"] > t)
         return frame["t_after"] if frame else None
 
+    def presented_after(t: float) -> float | None:
+        frame = first(frames, lambda f: f["t_after"] > t)
+        return presented.get(frame.get("counter")) if frame else None
+
     focus = first(events, lambda e: e["ev"] == "focus" and e["focus_in"] and e["win"] == LAUNCHER_WIN)
+    action = first(events, lambda e: e["ev"] == "action" and e["name"] == "toggle-window")
+    mapped = first(events, lambda e: e["ev"] == "map" and e["win"] == LAUNCHER_WIN)
+    first_frame = frames[0] if frames else None
     key_rows = []
     used: set[int] = set()
     for i, (char, sym, t_inject) in enumerate(injected):
@@ -505,6 +516,8 @@ def analyze(
         if char != "\n":
             painted = painted_after(match["t1"]) if match else None
             row["key_to_paint_ms"] = ms(painted - t_inject) if painted else None
+            on_screen = presented_after(match["t1"]) if match else None
+            row["key_to_screen_ms"] = ms(on_screen - t_inject) if on_screen else None
             results_painted = painted_after(render["t1"]) if render else None
             row["results_ms"] = ms(results_painted - t_inject) if results_painted else None
         key_rows.append(row)
@@ -519,12 +532,17 @@ def analyze(
     last_char = typed_rows[-1]
     frame_ms = [ms(f["t_after"] - f["t_before"]) for f in frames if f["t_before"] and f["t_after"] > enter[2] - 2]
     typed_queries = [q for q in events if q["ev"] == "query" and q["text"] and q["t0"] < enter[2] + 1]
+    # the probe's phase handlers run after GTK's, so t_layout and t_paint mark where those phases end
+    paint_ms = [ms(f["t_paint"] - f["t_layout"]) for f in frames if f.get("t_layout") and f.get("t_paint")]
     return {
         "word": word,
         "interval_ms": round(interval * 1000),
         "delay_ms": round(delay * 1000),
         "toggle_to_focus_ms": ms(focus["t"] - t_toggle) if focus else None,
         "toggle_to_first_frame_ms": ms(frames[0]["t_after"] - t_toggle) if frames else None,
+        "toggle_to_action_ms": ms(action["t"] - t_toggle) if action else None,
+        "action_to_map_ms": ms(mapped["t"] - action["t"]) if action and mapped else None,
+        "first_frame_to_focus_ms": ms(focus["t"] - first_frame["t_after"]) if focus and first_frame else None,
         "keys": key_rows,
         "text_at_enter": enter_row["text_before"],
         "lost_chars": sum(1 for r in typed_rows if not r["received"]),
@@ -538,6 +556,7 @@ def analyze(
         "max_frame_ms": max((f for f in frame_ms if f is not None), default=None),
         "queries": len(typed_queries),
         "query_ms": [ms(q["t1"] - q["t0"]) for q in typed_queries],
+        "paint_ms": paint_ms,
     }
 
 
@@ -568,9 +587,13 @@ def summarize(label: str, trials: list[dict[str, Any]], reference: dict[str, Any
         "lost_to_previous_app": sum(len(t["lost_to_previous"]) for t in trials),
         "toggle_to_focus_ms": stats([t["toggle_to_focus_ms"] for t in trials]),
         "toggle_to_first_frame_ms": stats([t["toggle_to_first_frame_ms"] for t in trials]),
+        "toggle_to_action_ms": stats([t.get("toggle_to_action_ms") for t in trials]),
+        "action_to_map_ms": stats([t.get("action_to_map_ms") for t in trials]),
+        "first_frame_to_focus_ms": stats([t.get("first_frame_to_focus_ms") for t in trials]),
         "key_queue_ms": stats([k["queue_ms"] for k in char_rows]),
         "key_handler_ms": stats([k["handler_ms"] for k in char_rows]),
         "key_to_paint_ms": stats([k["key_to_paint_ms"] for k in char_rows]),
+        "key_to_screen_ms": stats([k.get("key_to_screen_ms") for k in char_rows]),
         "final_results_ms": stats([t["final_results_ms"] for t in trials]),
         "enter_handler_ms": stats([t["keys"][-1]["handler_ms"] for t in trials]),
         "enter_to_launch_ms": stats([t["enter_to_launch_ms"] for t in trials]),
@@ -578,6 +601,7 @@ def summarize(label: str, trials: list[dict[str, Any]], reference: dict[str, Any
         "enter_to_app_focus_ms": stats([t["enter_to_app_focus_ms"] for t in trials]),
         "max_frame_ms": stats([t["max_frame_ms"] for t in trials]),
         "query_ms": stats([q for t in trials for q in t.get("query_ms", [])]),
+        "paint_ms": stats([p for t in trials for p in t.get("paint_ms", [])]),
         "queries_per_trial": stats([t.get("queries") for t in trials]),
     }
 
@@ -625,20 +649,21 @@ def run(args: argparse.Namespace) -> None:
     trees = []
     for spec in args.tree:
         label, _, path = spec.rpartition("=")
+        path, _, experiments = path.partition("+")
         tree = export_rev(path.removeprefix("git:")) if path.startswith("git:") else Path(path).resolve()
-        trees.append((label or tree.name, tree))
+        trees.append((label or tree.name, tree, experiments))
     intervals = [float(x) / 1000 for x in args.intervals.split(",")]
     delays = [float(x) / 1000 for x in args.delays.split(",")]
     words = args.words.split(",")
     session = Session(keep=args.keep, refresh=args.refresh)
-    trials: dict[str, list[dict[str, Any]]] = {label: [] for label, _ in trees}
-    references: dict[str, dict[str, Any]] = {label: {} for label, _ in trees}
+    trials: dict[str, list[dict[str, Any]]] = {label: [] for label, _, _ in trees}
+    references: dict[str, dict[str, Any]] = {label: {} for label, _, _ in trees}
     try:
         session.start()
         for round_no in range(args.rounds):
             order = trees if round_no % 2 == 0 else list(reversed(trees))
-            for label, tree in order:
-                launcher = Launcher(session, label, tree)
+            for label, tree, experiments in order:
+                launcher = Launcher(session, label, tree, experiments)
                 launcher.start()
                 try:
                     for word in words:
@@ -661,13 +686,13 @@ def run(args: argparse.Namespace) -> None:
                     launcher.stop()
     finally:
         session.stop()
-    summaries = [summarize(label, trials[label], references[label]) for label, _ in trees]
+    summaries = [summarize(label, trials[label], references[label]) for label, _, _ in trees]
     print_summary(summaries)
-    for label, _ in trees:
+    for label, _, _ in trees:
         for word, ref in references[label].items():
             print(f"reference launch for {word!r} ({label}): {ref['launch_cmd']}")
     RESULTS.mkdir(parents=True, exist_ok=True)
-    out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S')}-{'-vs-'.join(label for label, _ in trees)}.json"
+    out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S')}-{'-vs-'.join(label for label, _, _ in trees)}.json"
     out.write_text(
         json.dumps({"args": vars(args), "summaries": summaries, "references": references, "trials": trials}, indent=1)
     )
