@@ -212,8 +212,8 @@ class UlauncherApp(Gtk.Application):
             launcher = None
         if not launcher:
             launcher = self._build_launcher()
-        self.windows["main"] = launcher
         launcher.open()
+        self.windows["main"] = launcher
 
     def _build_launcher(self) -> UlauncherWindow:
         launcher = UlauncherWindow(application=self)

@@ -226,3 +226,16 @@ def test_window_ready__reloads_only_changed_triggers(mocker: MockerFixture) -> N
     app.window_ready()
 
     app.core.load_triggers.assert_called_once_with()
+
+
+def test_show_launcher__registers_the_window_only_once_it_opened(launcher_app: UlauncherApp) -> None:
+    def failing_open() -> None:
+        raise RuntimeError
+
+    launcher = _FakeLauncher(launcher_app)
+    launcher.open = failing_open  # type: ignore[method-assign]
+    launcher_app._launcher = cast("Any", launcher)
+    with pytest.raises(RuntimeError):
+        launcher_app.show_launcher()
+
+    assert "main" not in launcher_app.windows
