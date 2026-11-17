@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_EXE_ICON = f"{paths.ASSETS}/icons/executable.png"
 
 
-@lru_cache(maxsize=50)
+# Holds every app icon (about 6 KB each). At 50, a few short queries evicted each other's icons.
+@lru_cache(maxsize=512)
 def load_icon_surface(icon: str, size: int, scaling_factor: int = 1) -> ImageSurface:
     from gi.repository import Gdk, GdkPixbuf
 
