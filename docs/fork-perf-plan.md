@@ -168,8 +168,15 @@ No wrong launches. Lost keys are the same in both and all were typed before the 
 
 ### Left open
 
-- Deleting does not coalesce: BackSpace and Ctrl or Alt combinations run a pending query at once.
-- A row built on demand right after a render is not scrolled into view until the next arrow key.
 - The settings and theme check costs about 1.25 ms per open before the window shows.
 - Not measured: the live GNOME session with its GPU compositor and the real hotkey, X11 and
   XWayland, layer shell, and the non-persistent mode in daily use.
+
+### Upstream PRs
+
+Decided on 2026-11-17: the owner daily drives the fork first, then sends the work upstream as a
+series of small PRs, one change each, stacked in commit order, each with its own harness numbers.
+The harness stays in the fork; the PR text describes the method and shows the numbers. Fork-only
+commits stay out: this plan, the harness and its lint config, and the `.perf` ignore. Upstream
+asks that the author owns and has verified every line (friday on #1549), and UI behaviour changes
+also need gornostal (#1656). Upstream main had not moved past the fork's base on 2026-11-17.
