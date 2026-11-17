@@ -168,7 +168,6 @@ No wrong launches. Lost keys are the same in both and all were typed before the 
 
 ### Left open
 
-- The settings and theme check costs about 1.25 ms per open before the window shows.
 - Not measured: the live GNOME session with its GPU compositor and the real hotkey, X11 and
   XWayland, layer shell, and the non-persistent mode in daily use.
 
