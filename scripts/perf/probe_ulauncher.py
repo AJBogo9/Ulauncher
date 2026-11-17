@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
 TREE = os.environ["ULH_TREE"]
 LOG = open(os.environ["ULH_PROBE_LOG"], "a", buffering=1)  # noqa: SIM115
@@ -181,10 +182,34 @@ def install_probes() -> bool:
     if hasattr(UlauncherApp, "query_changed"):
         original_query_changed = UlauncherApp.query_changed
 
+        profiles: dict[str, Any] = {}
+        if "profile" in EXPERIMENTS:
+            import atexit
+            import cProfile
+            import pstats
+
+            def dump_profiles() -> None:
+                for key, profile in profiles.items():
+                    pstats.Stats(profile).dump_stats(f"{os.environ['ULH_PROBE_LOG']}.{key}.pstats")
+
+            atexit.register(dump_profiles)
+        first_after_open = {"pending": True}
+
         def query_changed(self: object, query_str: str, *args: object, **kwargs: object) -> object:
+            # profiles the first query after each open apart from the rest, since they differ
+            key = "first" if first_after_open["pending"] and query_str else "rest"
+            if query_str:
+                first_after_open["pending"] = False
+            profile = profiles.setdefault(key, cProfile.Profile()) if "profile" in EXPERIMENTS else None
             t0 = now()
+            if profile:
+                profile.enable()
             ret = original_query_changed(self, query_str, *args, **kwargs)
+            if profile:
+                profile.disable()
             emit("query", t0=t0, t1=now(), text=query_str)
+            if not query_str:
+                first_after_open["pending"] = True
             return ret
 
         UlauncherApp.query_changed = query_changed
